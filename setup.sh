@@ -159,8 +159,12 @@ msg() {
 
 create_simple_wallpaper() {
     msg "Creating default wallpaper"
-    # Create a simple 1x1 black pixel that feh can scale
-    printf '\x00\x00\x00' > "$WALLPAPER_PATH"
+    cat > "$WALLPAPER_PATH" << 'EOF'
+P3
+1 1
+255
+0 0 0
+EOF
 }
 
 detect_and_install_gpu_drivers() {

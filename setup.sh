@@ -1,438 +1,281 @@
 #!/bin/bash
 # Suckless Desktop Environment Setup Script
-# Edit the configuration section below to customize your setup
+# Dynamic configuration - edit the arrays below to customize your setup
+# Everything is configurable - the script adapts to your choices
+#
+# Usage: Edit the package arrays below, then run: bash setup.sh
+# - Remove packages/tools you don't want
+# - Add new packages to any array
+# - Set GPU_DRIVER to your needs (or leave as "auto")
 
 set -e
 
 #
-# CONFIGURATION - Edit these arrays to customize your setup
+# CONFIGURATION - Edit these to customize
 #
 
-# Essential X11 and build packages (required - don't remove)
+# Essential packages (required)
 ESSENTIAL_PACKAGES=(
-    "build-essential"
-    "git" 
-    "libx11-dev"
-    "libxft-dev"
-    "libxinerama-dev" 
-    "libxrandr-dev"
-    "libimlib2-dev"
-    "xorg"
-    "xinit"
-    "pkg-config"
+    build-essential git libx11-dev libxft-dev libxinerama-dev 
+    libxrandr-dev libimlib2-dev xorg xinit pkg-config
 )
 
-# Window manager and compositor packages (easily removable)
-WM_PACKAGES=(
-    "feh"           # wallpaper setter
-    "picom"         # compositor
+# Desktop packages
+WM_PACKAGES=(feh picom)
+AUDIO_PACKAGES=(pulseaudio alsa-utils)
+NETWORK_PACKAGES=(network-manager)
+DEV_PACKAGES=(make gcc)
+APP_PACKAGES=(firefox-esr nano)
+# Example additions: vim htop neofetch chromium vlc
+
+# Suckless tools
+SUCKLESS_TOOLS=(dwm st dmenu slock slstatus)
+# Can remove/add: surf tabbed sent
+
+# Patches (format: "tool:patch_url")
+PATCHES=(
+    #"dwm:https://dwm.suckless.org/patches/systray/dwm-systray-6.4.diff"
+    #"st:https://st.suckless.org/patches/scrollback/st-scrollback-0.8.5.diff"
 )
 
-# Audio packages (empty array = no audio support)
-AUDIO_PACKAGES=(
-    "pulseaudio"
-    "alsa-utils"
-)
-
-# Network packages (empty array = no network tools)
-NETWORK_PACKAGES=(
-    "network-manager"
-)
-
-# Application packages (empty array = no additional apps)
-# Common additions: emacs, vim, git-gui, etc.
-APP_PACKAGES=(
-    "firefox-esr"
-    "nano"
-)
-
-# Suckless tools to install from source
-SUCKLESS_TOOLS=(
-    "dwm"
-    "st" 
-    "dmenu"
-    "slock"
-    "slstatus"
-)
-
-# GPU driver configuration
-# Options: "auto", "nvidia", "amd", "intel", or "" (empty for no drivers)
+# GPU driver: auto, nvidia, amd, intel, or empty
 GPU_DRIVER="auto"
 
-# GPU driver packages
-NVIDIA_PACKAGES=("nvidia-driver" "firmware-misc-nonfree")
-AMD_PACKAGES=("firmware-amd-graphics" "libgl1-mesa-dri") 
-INTEL_PACKAGES=("intel-media-va-driver" "mesa-va-drivers")
-
-# Directories and paths
+# Directories
 SUCKLESS_DIR="$HOME/.local/src"
-WALLPAPER_PATH="$HOME/.wallpaper"
-
-# Default applications (change to your preference)
-DEFAULT_EDITOR="nano"
-DEFAULT_BROWSER="firefox"
-DEFAULT_TERMINAL="st"
-
-# Enable auto-start X on tty1 (1 = enable, 0 = disable)
-AUTO_START_X=1
 
 #
-# DOTFILE TEMPLATES - Customize as needed
+# FUNCTIONS
 #
 
-generate_xinitrc() {
-    cat > "$HOME/.xinitrc" << 'EOF'
-#!/bin/sh
-# Set wallpaper
-feh --bg-scale ~/.wallpaper 2>/dev/null &
+msg() { echo "==> $*"; }
+die() { echo "Error: $*" >&2; exit 1; }
 
-# Start compositor  
-picom -b 2>/dev/null &
-
-# Start status bar
-slstatus 2>/dev/null &
-
-# Start window manager
-exec dwm
-EOF
-    chmod +x "$HOME/.xinitrc"
-}
-
-generate_profile() {
-    cat > "$HOME/.profile" << EOF
-# Local binaries
-export PATH="\$HOME/.local/bin:\$PATH"
-
-# Default applications
-export EDITOR=$DEFAULT_EDITOR
-export BROWSER=$DEFAULT_BROWSER
-export TERMINAL=$DEFAULT_TERMINAL
-
-# Auto-start X on tty1 (comment out if you don't want this)
-EOF
-    
-    if [ "$AUTO_START_X" = "1" ]; then
-        echo '[ -z "$DISPLAY" ] && [ "$XDG_VTNR" = 1 ] && exec startx' >> "$HOME/.profile"
+detect_gpu() {
+    if lspci | grep -qi nvidia; then echo "nvidia"
+    elif lspci | grep -qi amd; then echo "amd"
+    elif lspci | grep -qi intel; then echo "intel"
+    else echo "none"
     fi
 }
 
-generate_bashrc() {
-    cat > "$HOME/.bashrc" << 'EOF'
+check_system() {
+    msg "Checking system"
+    command -v apt >/dev/null || die "This script requires Debian/Ubuntu"
+    sudo true || die "This script requires sudo access"
+    
+    # Ensure dwm is in the tools list
+    [[ " ${SUCKLESS_TOOLS[@]} " =~ " dwm " ]] || die "dwm must be in SUCKLESS_TOOLS array"
+    
+    ping -c 1 git.suckless.org >/dev/null 2>&1 || {
+        echo "Warning: Cannot reach git.suckless.org"
+        read -p "Continue anyway? (y/N): " -r
+        [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+    }
+}
+
+install_packages() {
+    msg "Installing packages"
+    sudo apt update || die "apt update failed"
+    
+    # Build package list from non-empty arrays
+    local all_packages=("${ESSENTIAL_PACKAGES[@]}")
+    [ ${#WM_PACKAGES[@]} -gt 0 ] && all_packages+=("${WM_PACKAGES[@]}")
+    [ ${#AUDIO_PACKAGES[@]} -gt 0 ] && all_packages+=("${AUDIO_PACKAGES[@]}")
+    [ ${#NETWORK_PACKAGES[@]} -gt 0 ] && all_packages+=("${NETWORK_PACKAGES[@]}")
+    [ ${#DEV_PACKAGES[@]} -gt 0 ] && all_packages+=("${DEV_PACKAGES[@]}")
+    [ ${#APP_PACKAGES[@]} -gt 0 ] && all_packages+=("${APP_PACKAGES[@]}")
+    
+    # Install all packages at once
+    sudo apt install -y "${all_packages[@]}" || die "Package installation failed"
+    
+    # GPU drivers
+    case "$GPU_DRIVER" in
+        auto)
+            local detected_gpu=$(detect_gpu)
+            case "$detected_gpu" in
+                nvidia)
+                    msg "Detected NVIDIA GPU"
+                    sudo apt install -y nvidia-driver firmware-misc-nonfree
+                    ;;
+                amd)
+                    msg "Detected AMD GPU"
+                    sudo apt install -y firmware-amd-graphics libgl1-mesa-dri
+                    ;;
+                intel)
+                    msg "Detected Intel GPU"
+                    sudo apt install -y intel-media-va-driver mesa-va-drivers
+                    ;;
+            esac
+            ;;
+        nvidia) sudo apt install -y nvidia-driver firmware-misc-nonfree ;;
+        amd)    sudo apt install -y firmware-amd-graphics libgl1-mesa-dri ;;
+        intel)  sudo apt install -y intel-media-va-driver mesa-va-drivers ;;
+    esac
+}
+
+setup_directories() {
+    msg "Creating directories"
+    mkdir -p "$SUCKLESS_DIR"
+    mkdir -p "$HOME/.config/suckless"/{dwm,st,dmenu,slock,slstatus}
+    mkdir -p "$HOME/.local/bin"
+}
+
+install_suckless() {
+    msg "Installing suckless tools"
+    cd "$SUCKLESS_DIR"
+    
+    for tool in "${SUCKLESS_TOOLS[@]}"; do
+        if [ ! -d "$tool" ]; then
+            msg "Cloning $tool"
+            git clone "https://git.suckless.org/$tool" || die "Failed to clone $tool"
+        fi
+        
+        msg "Building $tool"
+        cd "$tool"
+
+        # Apply patches (if any)
+        for patch_entry in "${PATCHES[@]}"; do
+            IFS=':' read -r patch_tool patch_url <<< "$patch_entry"
+            if [ "$tool" = "$patch_tool" ] && [ -n "$patch_url" ]; then
+                msg "Applying patch to $tool"
+                curl -s "$patch_url" | patch -p1 || echo "Warning: Patch failed"
+            fi
+        done
+        
+        # Check for custom config
+        if [ -f "$HOME/.config/suckless/$tool/config.h" ]; then
+            cp "$HOME/.config/suckless/$tool/config.h" .
+        fi
+        
+        sudo make clean install || die "Failed to build $tool"
+        cd ..
+    done
+}
+
+configure_system() {
+    msg "Configuring system"
+
+    # Backup existing configs (if existing)
+    [ -f ~/.xinitrc ] && cp ~/.xinitrc ~/.xinitrc.bak
+    [ -f ~/.bashrc ] && cp ~/.bashrc ~/.bashrc.bak
+    
+    # Enable services based on what was installed
+    if [[ " ${NETWORK_PACKAGES[@]} " =~ " network-manager " ]]; then
+        sudo systemctl enable NetworkManager 2>/dev/null || true
+    fi
+    
+    if [ ${#AUDIO_PACKAGES[@]} -gt 0 ]; then
+        sudo usermod -a -G audio "$USER" 2>/dev/null || true
+    fi
+    
+    # Create xinitrc dynamically based on installed packages
+    cat > ~/.xinitrc << 'EOF'
+#!/bin/sh
+EOF
+    
+    # Add wallpaper setter if feh is installed
+    [[ " ${WM_PACKAGES[@]} " =~ " feh " ]] && \
+        echo 'feh --bg-scale ~/.wallpaper 2>/dev/null &' >> ~/.xinitrc
+    
+    # Add compositor if picom is installed
+    [[ " ${WM_PACKAGES[@]} " =~ " picom " ]] && \
+        echo 'picom -b 2>/dev/null &' >> ~/.xinitrc
+    
+    # Add status bar if slstatus is in tools
+    [[ " ${SUCKLESS_TOOLS[@]} " =~ " slstatus " ]] && \
+        echo 'slstatus 2>/dev/null &' >> ~/.xinitrc
+    
+    # Always add dwm at the end
+    echo 'exec dwm' >> ~/.xinitrc
+    chmod +x ~/.xinitrc
+    
+    # Detect installed programs for environment variables
+    local default_browser=""
+    local default_editor=""
+    
+    # Check what was actually installed
+    for app in "${APP_PACKAGES[@]}"; do
+        case "$app" in
+            firefox*) default_browser="firefox" ;;
+            chromium*) default_browser="chromium" ;;
+            nano) default_editor="nano" ;;
+            vim) default_editor="vim" ;;
+            emacs) default_editor="emacs" ;;
+        esac
+    done
+    
+    # Create bashrc
+    cat > ~/.bashrc << EOF
 # Source system bashrc
 [ -f /etc/bashrc ] && . /etc/bashrc
 
-# Source profile
-[ -f ~/.profile ] && . ~/.profile
+# Environment
+export PATH="\$HOME/.local/bin:\$PATH"
+${default_editor:+export EDITOR=$default_editor}
+${default_browser:+export BROWSER=$default_browser}
+export TERMINAL=st
 
 # Prompt
-PS1='\u@\h:\w$ '
-
-# History
-HISTSIZE=1000
-HISTCONTROL=ignoreboth
+PS1='\u@\h:\w\$ '
 
 # Aliases
 alias ls='ls --color=auto'
 alias ll='ls -la'
 alias la='ls -A'
-alias l='ls -CF'
 alias grep='grep --color=auto'
 alias ..='cd ..'
-alias ...='cd ../..'
-
-# Custom aliases - add your own below
-# alias open='xdg-open'
-# alias battery='cat /sys/class/power_supply/BAT0/capacity'
 EOF
-}
-
-#
-# VALIDATION FUNCTIONS - System and permission checks
-#
-
-check_system_compatibility() {
-    msg "Checking system compatibility"
     
-    # Check if we're on a Debian-based system
-    if [ ! -f /etc/debian_version ] && ! command -v apt >/dev/null 2>&1; then
-        echo "Error: This script requires a Debian-based system (Debian/Ubuntu)"
-        echo "Current system does not appear to have apt package manager"
-        exit 1
-    fi
+    # Auto-start X
+    echo '[ -z "$DISPLAY" ] && [ "$XDG_VTNR" = 1 ] && exec startx' >> ~/.profile
     
-    # Check for required commands
-    local missing_commands=()
-    for cmd in git make gcc; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing_commands+=("$cmd")
-        fi
-    done
-    
-    if [ ${#missing_commands[@]} -gt 0 ]; then
-        echo "Warning: Missing commands will be installed: ${missing_commands[*]}"
+    # Create wallpaper only if feh is installed
+    if [[ " ${WM_PACKAGES[@]} " =~ " feh " ]]; then
+        # Create minimal black wallpaper (1x1 pixel PPM image)
+        printf "P3\n1 1\n255\n0 0 0\n" > ~/.wallpaper
     fi
 }
 
-check_sudo_access() {
-    msg "Checking sudo permissions"
-    
-    # Test sudo access without actually running a privileged command
-    if ! sudo -n true 2>/dev/null; then
-        echo "This script requires sudo access for package installation."
-        echo "Please enter your password when prompted:"
-        if ! sudo true; then
-            echo "Error: Unable to obtain sudo privileges"
-            exit 1
-        fi
-    fi
-    
-    msg "Sudo access confirmed"
-}
-
-check_network_connectivity() {
-    msg "Checking network connectivity"
-    
-    # Check if we can reach the suckless git server
-    if ! ping -c 1 git.suckless.org >/dev/null 2>&1; then
-        if ! ping -c 1 8.8.8.8 >/dev/null 2>&1; then
-            echo "Warning: No network connectivity detected"
-            echo "You may need to configure networking before running this script"
-            read -p "Continue anyway? (y/N): " -r
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                exit 1
-            fi
-        else
-            echo "Warning: Cannot reach git.suckless.org"
-            echo "Network is available but suckless.org may be unreachable"
-            read -p "Continue anyway? (y/N): " -r
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                exit 1
-            fi
-        fi
-    fi
-}
-
-#
-# FUNCTIONS - Generally no need to edit below this line
-#
-
-msg() { 
-    echo "==> $*" 
-}
-
-create_simple_wallpaper() {
-    msg "Creating default wallpaper"
-    cat > "$WALLPAPER_PATH" << 'EOF'
-P3
-1 1
-255
-0 0 0
-EOF
-}
-
-detect_and_install_gpu_drivers() {
-    [ -z "$GPU_DRIVER" ] && return
-    
-    case "$GPU_DRIVER" in
-        "auto")
-            if lspci | grep -qi nvidia; then
-                msg "Auto-detected NVIDIA GPU, installing drivers"
-                sudo apt install -y "${NVIDIA_PACKAGES[@]}"
-            elif lspci | grep -qi amd; then
-                msg "Auto-detected AMD GPU, installing drivers" 
-                sudo apt install -y "${AMD_PACKAGES[@]}"
-            elif lspci | grep -qi intel; then
-                msg "Auto-detected Intel GPU, installing drivers"
-                sudo apt install -y "${INTEL_PACKAGES[@]}"
-            else
-                msg "No specific GPU detected for auto-install"
-            fi
-            ;;
-        "nvidia")
-            msg "Installing NVIDIA drivers"
-            sudo apt install -y "${NVIDIA_PACKAGES[@]}"
-            ;;
-        "amd")
-            msg "Installing AMD drivers"
-            sudo apt install -y "${AMD_PACKAGES[@]}"
-            ;;
-        "intel")
-            msg "Installing Intel drivers"
-            sudo apt install -y "${INTEL_PACKAGES[@]}"
-            ;;
-        *)
-            msg "Unknown GPU driver option: $GPU_DRIVER"
-            ;;
-    esac
-}
-
-install_package_groups() {
-    msg "Updating package database"
-    sudo apt update
-    
-    msg "Installing essential packages"
-    sudo apt install -y "${ESSENTIAL_PACKAGES[@]}"
-    
-    msg "Installing window manager packages"
-    sudo apt install -y "${WM_PACKAGES[@]}"
-    
-    if [ ${#AUDIO_PACKAGES[@]} -gt 0 ]; then
-        msg "Installing audio packages"
-        sudo apt install -y "${AUDIO_PACKAGES[@]}"
-    fi
-    
-    if [ ${#NETWORK_PACKAGES[@]} -gt 0 ]; then
-        msg "Installing network packages"
-        sudo apt install -y "${NETWORK_PACKAGES[@]}"
-    fi
-    
-    if [ ${#APP_PACKAGES[@]} -gt 0 ]; then
-        msg "Installing application packages"
-        sudo apt install -y "${APP_PACKAGES[@]}"
-    fi
-    
-    detect_and_install_gpu_drivers
-}
-
-setup_system_services() {
-    if [ ${#NETWORK_PACKAGES[@]} -gt 0 ] && systemctl list-unit-files | grep -q NetworkManager; then
-        msg "Enabling NetworkManager"
-        sudo systemctl enable NetworkManager 2>/dev/null || true
-    fi
-    
-    if [ ${#AUDIO_PACKAGES[@]} -gt 0 ]; then
-        msg "Adding user to audio group"
-        sudo usermod -a -G audio "$USER" 2>/dev/null || true
-    fi
-}
-
-setup_config_dirs() {
-    msg "Setting up configuration directories"
-    mkdir -p "$HOME/.config/suckless"/{dwm,st,dmenu,slock,slstatus}
-    mkdir -p "$HOME/.local/bin"
-}
-
-clone_with_retry() {
-    local tool="$1"
-    local url="$2"
-    local max_attempts=3
-    local attempt=1
-    
-    while [ $attempt -le $max_attempts ]; do
-        msg "Cloning $tool (attempt $attempt/$max_attempts)"
-        if git clone "$url" "$tool"; then
-            return 0
-        fi
-        
-        msg "Clone attempt $attempt failed"
-        [ -d "$tool" ] && rm -rf "$tool"
-        
-        if [ $attempt -lt $max_attempts ]; then
-            msg "Retrying in 5 seconds..."
-            sleep 5
-        fi
-        
-        attempt=$((attempt + 1))
-    done
-    
-    msg "Failed to clone $tool after $max_attempts attempts"
-    return 1
-}
-
-install_suckless_tools() {
-    msg "Installing suckless tools"
-    
-    mkdir -p "$SUCKLESS_DIR"
-    cd "$SUCKLESS_DIR"
-    
-    local failed_tools=()
-    
-    for tool in "${SUCKLESS_TOOLS[@]}"; do
-        if [ ! -d "$tool" ]; then
-            if ! clone_with_retry "$tool" "https://git.suckless.org/$tool"; then
-                failed_tools+=("$tool")
-                continue
-            fi
-        else
-            msg "Updating $tool"
-            cd "$tool"
-            if ! git pull; then
-                msg "Warning: Failed to update $tool, using existing version"
-            fi
-            cd ..
-        fi
-        
-        msg "Building and installing $tool"
-        cd "$tool"
-        
-        # Check for user config.h
-        if [ -f "$HOME/.config/suckless/$tool/config.h" ]; then
-            msg "Using custom config for $tool"
-            cp "$HOME/.config/suckless/$tool/config.h" .
-        fi
-        
-        if ! sudo make clean install; then
-            msg "Warning: $tool installation may have failed"
-            failed_tools+=("$tool")
-        fi
-        cd ..
-    done
-    
-    if [ ${#failed_tools[@]} -gt 0 ]; then
-        msg "Failed to install: ${failed_tools[*]}"
-        msg "You may need to install these manually later"
-    fi
-}
-
-create_dotfiles() {
-    msg "Creating dotfiles"
-    
-    # Create configuration files
-    generate_xinitrc
-    generate_profile  
-    generate_bashrc
-    
-    # Create wallpaper
-    create_simple_wallpaper
-}
-
-show_completion_message() {
+show_complete() {
     msg "Setup complete!"
     echo
-    echo "What was installed:"
+    echo "Installed components:"
     echo "  - Suckless tools: ${SUCKLESS_TOOLS[*]}"
+    
+    # Display what was actually installed from each category
+    [ ${#WM_PACKAGES[@]} -gt 0 ] && echo "  - Window manager extras: ${WM_PACKAGES[*]}"
+    [ ${#AUDIO_PACKAGES[@]} -gt 0 ] && echo "  - Audio support: ${AUDIO_PACKAGES[*]}"
+    [ ${#NETWORK_PACKAGES[@]} -gt 0 ] && echo "  - Network tools: ${NETWORK_PACKAGES[*]}"
+    [ ${#DEV_PACKAGES[@]} -gt 0 ] && echo "  - Development tools: ${DEV_PACKAGES[*]}"
     [ ${#APP_PACKAGES[@]} -gt 0 ] && echo "  - Applications: ${APP_PACKAGES[*]}"
-    [ ${#AUDIO_PACKAGES[@]} -gt 0 ] && echo "  - Audio support: enabled"
-    [ ${#NETWORK_PACKAGES[@]} -gt 0 ] && echo "  - Network tools: enabled"
-    [ -n "$GPU_DRIVER" ] && echo "  - GPU drivers: $GPU_DRIVER"
-    echo "  - Dotfiles: .xinitrc, .profile, .bashrc"
-    echo "  - Default wallpaper: $WALLPAPER_PATH"
-    echo "  - Config directories: ~/.config/suckless/"
+    
+    # Show GPU driver if installed
+    if [ -n "$GPU_DRIVER" ]; then
+        local gpu_msg="$GPU_DRIVER"
+        if [ "$GPU_DRIVER" = "auto" ]; then
+            local detected=$(detect_gpu)
+            gpu_msg="auto-detected $detected"
+        fi
+        echo "  - GPU driver: $gpu_msg"
+    fi
+    
     echo
-    echo "Next steps:"
-    echo "  - Reboot or run 'source ~/.profile' to apply changes"
-    [ "$AUTO_START_X" = "1" ] && echo "  - X will start automatically on tty1"
-    echo "  - Customize your dotfiles and suckless configs as needed"
-    echo "  - Edit suckless tool configs in $SUCKLESS_DIR/[tool]/config.h"
-    echo "  - Or place custom configs in ~/.config/suckless/[tool]/config.h"
+    echo "Config locations:"
+    echo "  - Suckless sources: $SUCKLESS_DIR"
+    echo "  - Custom configs: ~/.config/suckless/[tool]/config.h"
+    echo "  - Dotfiles: ~/.xinitrc, ~/.bashrc, ~/.profile"
+    echo
+    echo "Next: Reboot to auto-start X on tty1"
 }
 
-run_validations() {
-    msg "Running system validations"
-    check_system_compatibility
-    check_sudo_access
-    check_network_connectivity
-}
+#
+# MAIN
+#
 
-main() {
-    run_validations
-    install_package_groups
-    setup_system_services
-    setup_config_dirs
-    install_suckless_tools
-    create_dotfiles
-    show_completion_message
-}
-
-# Run the setup
-main "$@"
+check_system
+install_packages
+setup_directories
+install_suckless
+configure_system
+show_complete

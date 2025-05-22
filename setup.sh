@@ -147,6 +147,72 @@ EOF
 }
 
 #
+# VALIDATION FUNCTIONS - System and permission checks
+#
+
+check_system_compatibility() {
+    msg "Checking system compatibility"
+    
+    # Check if we're on a Debian-based system
+    if [ ! -f /etc/debian_version ] && ! command -v apt >/dev/null 2>&1; then
+        echo "Error: This script requires a Debian-based system (Debian/Ubuntu)"
+        echo "Current system does not appear to have apt package manager"
+        exit 1
+    fi
+    
+    # Check for required commands
+    local missing_commands=()
+    for cmd in git make gcc; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_commands+=("$cmd")
+        fi
+    done
+    
+    if [ ${#missing_commands[@]} -gt 0 ]; then
+        echo "Warning: Missing commands will be installed: ${missing_commands[*]}"
+    fi
+}
+
+check_sudo_access() {
+    msg "Checking sudo permissions"
+    
+    # Test sudo access without actually running a privileged command
+    if ! sudo -n true 2>/dev/null; then
+        echo "This script requires sudo access for package installation."
+        echo "Please enter your password when prompted:"
+        if ! sudo true; then
+            echo "Error: Unable to obtain sudo privileges"
+            exit 1
+        fi
+    fi
+    
+    msg "Sudo access confirmed"
+}
+
+check_network_connectivity() {
+    msg "Checking network connectivity"
+    
+    # Check if we can reach the suckless git server
+    if ! ping -c 1 git.suckless.org >/dev/null 2>&1; then
+        if ! ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+            echo "Warning: No network connectivity detected"
+            echo "You may need to configure networking before running this script"
+            read -p "Continue anyway? (y/N): " -r
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+        else
+            echo "Warning: Cannot reach git.suckless.org"
+            echo "Network is available but suckless.org may be unreachable"
+            read -p "Continue anyway? (y/N): " -r
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+        fi
+    fi
+}
+
+#
 # FUNCTIONS - Generally no need to edit below this line
 #
 
@@ -246,22 +312,54 @@ setup_config_dirs() {
     mkdir -p "$HOME/.local/bin"
 }
 
+clone_with_retry() {
+    local tool="$1"
+    local url="$2"
+    local max_attempts=3
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        msg "Cloning $tool (attempt $attempt/$max_attempts)"
+        if git clone "$url" "$tool"; then
+            return 0
+        fi
+        
+        msg "Clone attempt $attempt failed"
+        [ -d "$tool" ] && rm -rf "$tool"
+        
+        if [ $attempt -lt $max_attempts ]; then
+            msg "Retrying in 5 seconds..."
+            sleep 5
+        fi
+        
+        attempt=$((attempt + 1))
+    done
+    
+    msg "Failed to clone $tool after $max_attempts attempts"
+    return 1
+}
+
 install_suckless_tools() {
     msg "Installing suckless tools"
     
     mkdir -p "$SUCKLESS_DIR"
     cd "$SUCKLESS_DIR"
     
+    local failed_tools=()
+    
     for tool in "${SUCKLESS_TOOLS[@]}"; do
         if [ ! -d "$tool" ]; then
-            msg "Cloning $tool"
-            git clone "https://git.suckless.org/$tool" || {
-                msg "Failed to clone $tool, skipping"
+            if ! clone_with_retry "$tool" "https://git.suckless.org/$tool"; then
+                failed_tools+=("$tool")
                 continue
-            }
+            fi
         else
             msg "Updating $tool"
-            cd "$tool" && git pull && cd ..
+            cd "$tool"
+            if ! git pull; then
+                msg "Warning: Failed to update $tool, using existing version"
+            fi
+            cd ..
         fi
         
         msg "Building and installing $tool"
@@ -273,9 +371,17 @@ install_suckless_tools() {
             cp "$HOME/.config/suckless/$tool/config.h" .
         fi
         
-        sudo make clean install || msg "Warning: $tool installation may have failed"
+        if ! sudo make clean install; then
+            msg "Warning: $tool installation may have failed"
+            failed_tools+=("$tool")
+        fi
         cd ..
     done
+    
+    if [ ${#failed_tools[@]} -gt 0 ]; then
+        msg "Failed to install: ${failed_tools[*]}"
+        msg "You may need to install these manually later"
+    fi
 }
 
 create_dotfiles() {
@@ -311,7 +417,15 @@ show_completion_message() {
     echo "  - Or place custom configs in ~/.config/suckless/[tool]/config.h"
 }
 
+run_validations() {
+    msg "Running system validations"
+    check_system_compatibility
+    check_sudo_access
+    check_network_connectivity
+}
+
 main() {
+    run_validations
     install_package_groups
     setup_system_services
     setup_config_dirs

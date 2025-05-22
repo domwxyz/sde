@@ -117,8 +117,12 @@ install_packages() {
 setup_directories() {
     msg "Creating directories"
     mkdir -p "$SUCKLESS_DIR"
-    mkdir -p "$HOME/.config/suckless"/{dwm,st,dmenu,slock,slstatus}
     mkdir -p "$HOME/.local/bin"
+    
+    # Only create config dirs for tools we're installing
+    for tool in "${SUCKLESS_TOOLS[@]}"; do
+        mkdir -p "$HOME/.config/suckless/$tool"
+    done
 }
 
 install_suckless() {

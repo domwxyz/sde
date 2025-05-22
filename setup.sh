@@ -19,6 +19,7 @@ ESSENTIAL_PACKAGES=(
     "libimlib2-dev"
     "xorg"
     "xinit"
+    "pkg-config"
 )
 
 # Window manager and compositor packages (easily removable)
@@ -84,9 +85,17 @@ AUTO_START_X=1
 
 generate_xinitrc() {
     cat > "$HOME/.xinitrc" << 'EOF'
+#!/bin/sh
+# Set wallpaper
 feh --bg-scale ~/.wallpaper 2>/dev/null &
+
+# Start compositor  
 picom -b 2>/dev/null &
+
+# Start status bar
 slstatus 2>/dev/null &
+
+# Start window manager
 exec dwm
 EOF
     chmod +x "$HOME/.xinitrc"
@@ -150,13 +159,8 @@ msg() {
 
 create_simple_wallpaper() {
     msg "Creating default wallpaper"
-    # Create a simple black wallpaper
-    {
-        echo "P6"
-        echo "$WALLPAPER_SIZE" 
-        echo "255"
-        dd if=/dev/zero bs=$((1920*1080*3)) count=1 2>/dev/null
-    } > "$WALLPAPER_PATH"
+    # Create a simple 1x1 black pixel that feh can scale
+    printf '\x00\x00\x00' > "$WALLPAPER_PATH"
 }
 
 detect_and_install_gpu_drivers() {
@@ -224,15 +228,21 @@ install_package_groups() {
 }
 
 setup_system_services() {
-    if [ ${#NETWORK_PACKAGES[@]} -gt 0 ]; then
+    if [ ${#NETWORK_PACKAGES[@]} -gt 0 ] && systemctl list-unit-files | grep -q NetworkManager; then
         msg "Enabling NetworkManager"
-        sudo systemctl enable NetworkManager
+        sudo systemctl enable NetworkManager 2>/dev/null || true
     fi
     
     if [ ${#AUDIO_PACKAGES[@]} -gt 0 ]; then
         msg "Adding user to audio group"
-        sudo usermod -a -G audio "$USER"
+        sudo usermod -a -G audio "$USER" 2>/dev/null || true
     fi
+}
+
+setup_config_dirs() {
+    msg "Setting up configuration directories"
+    mkdir -p "$HOME/.config/suckless"/{dwm,st,dmenu,slock,slstatus}
+    mkdir -p "$HOME/.local/bin"
 }
 
 install_suckless_tools() {
@@ -244,7 +254,10 @@ install_suckless_tools() {
     for tool in "${SUCKLESS_TOOLS[@]}"; do
         if [ ! -d "$tool" ]; then
             msg "Cloning $tool"
-            git clone "https://git.suckless.org/$tool"
+            git clone "https://git.suckless.org/$tool" || {
+                msg "Failed to clone $tool, skipping"
+                continue
+            }
         else
             msg "Updating $tool"
             cd "$tool" && git pull && cd ..
@@ -252,7 +265,14 @@ install_suckless_tools() {
         
         msg "Building and installing $tool"
         cd "$tool"
-        sudo make clean install
+        
+        # Check for user config.h
+        if [ -f "$HOME/.config/suckless/$tool/config.h" ]; then
+            msg "Using custom config for $tool"
+            cp "$HOME/.config/suckless/$tool/config.h" .
+        fi
+        
+        sudo make clean install || msg "Warning: $tool installation may have failed"
         cd ..
     done
 }
@@ -280,17 +300,20 @@ show_completion_message() {
     [ -n "$GPU_DRIVER" ] && echo "  - GPU drivers: $GPU_DRIVER"
     echo "  - Dotfiles: .xinitrc, .profile, .bashrc"
     echo "  - Default wallpaper: $WALLPAPER_PATH"
+    echo "  - Config directories: ~/.config/suckless/"
     echo
     echo "Next steps:"
     echo "  - Reboot or run 'source ~/.profile' to apply changes"
     [ "$AUTO_START_X" = "1" ] && echo "  - X will start automatically on tty1"
     echo "  - Customize your dotfiles and suckless configs as needed"
     echo "  - Edit suckless tool configs in $SUCKLESS_DIR/[tool]/config.h"
+    echo "  - Or place custom configs in ~/.config/suckless/[tool]/config.h"
 }
 
 main() {
     install_package_groups
     setup_system_services
+    setup_config_dirs
     install_suckless_tools
     create_dotfiles
     show_completion_message

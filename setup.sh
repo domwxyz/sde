@@ -256,14 +256,15 @@ show_completion_message() {
     echo
     echo "What was installed:"
     echo "  - Suckless tools: ${SUCKLESS_TOOLS[*]}"
+    echo "  - Applications: ${APP_PACKAGES[*]}"
     echo "  - Dotfiles: .xinitrc, .profile, .bashrc"
     echo "  - Default wallpaper: $WALLPAPER_PATH"
     echo
     echo "Next steps:"
-    echo "  1. Reboot or run 'source ~/.profile' to apply changes"
-    [ "$AUTO_START_X" = "1" ] && echo "  2. X will start automatically on tty1"
-    echo "  3. Customize your dotfiles and suckless configs as needed"
-    echo "  4. Edit suckless tool configs in $SUCKLESS_DIR/[tool]/config.h"
+    echo "  - Reboot or run 'source ~/.profile' to apply changes"
+    [ "$AUTO_START_X" = "1" ] && echo "  - X will start automatically on tty1"
+    echo "  - Customize your dotfiles and suckless configs as needed"
+    echo "  - Edit suckless tool configs in $SUCKLESS_DIR/[tool]/config.h"
 }
 
 main() {

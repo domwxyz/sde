@@ -27,23 +27,22 @@ WM_PACKAGES=(
     "picom"         # compositor
 )
 
-# Audio packages (remove if you don't want audio)
+# Audio packages (empty array = no audio support)
 AUDIO_PACKAGES=(
     "pulseaudio"
     "alsa-utils"
 )
 
-# Network packages (remove if using different network setup)
+# Network packages (empty array = no network tools)
 NETWORK_PACKAGES=(
     "network-manager"
 )
 
-# Application packages (add/remove as desired)
+# Application packages (empty array = no additional apps)
 # Common additions: emacs, vim, git-gui, etc.
 APP_PACKAGES=(
     "firefox-esr"
     "nano"
-    "imagemagick"
 )
 
 # Suckless tools to install from source
@@ -54,6 +53,10 @@ SUCKLESS_TOOLS=(
     "slock"
     "slstatus"
 )
+
+# GPU driver configuration
+# Options: "auto", "nvidia", "amd", "intel", or "" (empty for no drivers)
+GPU_DRIVER="auto"
 
 # GPU driver packages
 NVIDIA_PACKAGES=("nvidia-driver" "firmware-misc-nonfree")
@@ -71,13 +74,8 @@ DEFAULT_TERMINAL="st"
 
 # Wallpaper configuration
 WALLPAPER_SIZE="1920x1080"
-WALLPAPER_COLOR="#2e2e2e"
 
-# Enable/disable features (1 = enable, 0 = disable)
-INSTALL_GPU_DRIVERS=1
-INSTALL_AUDIO=1
-INSTALL_NETWORK=1
-INSTALL_APPS=1
+# Enable auto-start X on tty1 (1 = enable, 0 = disable)
 AUTO_START_X=1
 
 #
@@ -86,16 +84,9 @@ AUTO_START_X=1
 
 generate_xinitrc() {
     cat > "$HOME/.xinitrc" << 'EOF'
-# Set wallpaper
-feh --bg-scale ~/.wallpaper &
-
-# Start compositor
-picom -b &
-
-# Start status bar
-slstatus &
-
-# Start window manager (this should be last)
+feh --bg-scale ~/.wallpaper 2>/dev/null &
+picom -b 2>/dev/null &
+slstatus 2>/dev/null &
 exec dwm
 EOF
     chmod +x "$HOME/.xinitrc"
@@ -140,8 +131,6 @@ alias ll='ls -la'
 alias la='ls -A'
 alias l='ls -CF'
 alias grep='grep --color=auto'
-alias fgrep='fgrep --color=auto'
-alias egrep='egrep --color=auto'
 alias ..='cd ..'
 alias ...='cd ../..'
 
@@ -159,21 +148,51 @@ msg() {
     echo "==> $*" 
 }
 
+create_simple_wallpaper() {
+    msg "Creating default wallpaper"
+    # Create a simple black wallpaper
+    {
+        echo "P6"
+        echo "$WALLPAPER_SIZE" 
+        echo "255"
+        dd if=/dev/zero bs=$((1920*1080*3)) count=1 2>/dev/null
+    } > "$WALLPAPER_PATH"
+}
+
 detect_and_install_gpu_drivers() {
-    [ "$INSTALL_GPU_DRIVERS" != "1" ] && return
+    [ -z "$GPU_DRIVER" ] && return
     
-    if lspci | grep -qi nvidia; then
-        msg "Installing NVIDIA drivers"
-        sudo apt install -y "${NVIDIA_PACKAGES[@]}"
-    elif lspci | grep -qi amd; then
-        msg "Installing AMD drivers" 
-        sudo apt install -y "${AMD_PACKAGES[@]}"
-    elif lspci | grep -qi intel; then
-        msg "Installing Intel drivers"
-        sudo apt install -y "${INTEL_PACKAGES[@]}"
-    else
-        msg "No specific GPU drivers detected"
-    fi
+    case "$GPU_DRIVER" in
+        "auto")
+            if lspci | grep -qi nvidia; then
+                msg "Auto-detected NVIDIA GPU, installing drivers"
+                sudo apt install -y "${NVIDIA_PACKAGES[@]}"
+            elif lspci | grep -qi amd; then
+                msg "Auto-detected AMD GPU, installing drivers" 
+                sudo apt install -y "${AMD_PACKAGES[@]}"
+            elif lspci | grep -qi intel; then
+                msg "Auto-detected Intel GPU, installing drivers"
+                sudo apt install -y "${INTEL_PACKAGES[@]}"
+            else
+                msg "No specific GPU detected for auto-install"
+            fi
+            ;;
+        "nvidia")
+            msg "Installing NVIDIA drivers"
+            sudo apt install -y "${NVIDIA_PACKAGES[@]}"
+            ;;
+        "amd")
+            msg "Installing AMD drivers"
+            sudo apt install -y "${AMD_PACKAGES[@]}"
+            ;;
+        "intel")
+            msg "Installing Intel drivers"
+            sudo apt install -y "${INTEL_PACKAGES[@]}"
+            ;;
+        *)
+            msg "Unknown GPU driver option: $GPU_DRIVER"
+            ;;
+    esac
 }
 
 install_package_groups() {
@@ -186,17 +205,17 @@ install_package_groups() {
     msg "Installing window manager packages"
     sudo apt install -y "${WM_PACKAGES[@]}"
     
-    if [ "$INSTALL_AUDIO" = "1" ]; then
+    if [ ${#AUDIO_PACKAGES[@]} -gt 0 ]; then
         msg "Installing audio packages"
         sudo apt install -y "${AUDIO_PACKAGES[@]}"
     fi
     
-    if [ "$INSTALL_NETWORK" = "1" ]; then
+    if [ ${#NETWORK_PACKAGES[@]} -gt 0 ]; then
         msg "Installing network packages"
         sudo apt install -y "${NETWORK_PACKAGES[@]}"
     fi
     
-    if [ "$INSTALL_APPS" = "1" ]; then
+    if [ ${#APP_PACKAGES[@]} -gt 0 ]; then
         msg "Installing application packages"
         sudo apt install -y "${APP_PACKAGES[@]}"
     fi
@@ -205,12 +224,12 @@ install_package_groups() {
 }
 
 setup_system_services() {
-    if [ "$INSTALL_NETWORK" = "1" ]; then
+    if [ ${#NETWORK_PACKAGES[@]} -gt 0 ]; then
         msg "Enabling NetworkManager"
         sudo systemctl enable NetworkManager
     fi
     
-    if [ "$INSTALL_AUDIO" = "1" ]; then
+    if [ ${#AUDIO_PACKAGES[@]} -gt 0 ]; then
         msg "Adding user to audio group"
         sudo usermod -a -G audio "$USER"
     fi
@@ -247,8 +266,7 @@ create_dotfiles() {
     generate_bashrc
     
     # Create wallpaper
-    msg "Creating default wallpaper"
-    convert -size "$WALLPAPER_SIZE" "xc:$WALLPAPER_COLOR" "$WALLPAPER_PATH"
+    create_simple_wallpaper
 }
 
 show_completion_message() {
@@ -256,7 +274,10 @@ show_completion_message() {
     echo
     echo "What was installed:"
     echo "  - Suckless tools: ${SUCKLESS_TOOLS[*]}"
-    echo "  - Applications: ${APP_PACKAGES[*]}"
+    [ ${#APP_PACKAGES[@]} -gt 0 ] && echo "  - Applications: ${APP_PACKAGES[*]}"
+    [ ${#AUDIO_PACKAGES[@]} -gt 0 ] && echo "  - Audio support: enabled"
+    [ ${#NETWORK_PACKAGES[@]} -gt 0 ] && echo "  - Network tools: enabled"
+    [ -n "$GPU_DRIVER" ] && echo "  - GPU drivers: $GPU_DRIVER"
     echo "  - Dotfiles: .xinitrc, .profile, .bashrc"
     echo "  - Default wallpaper: $WALLPAPER_PATH"
     echo

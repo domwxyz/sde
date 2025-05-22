@@ -73,9 +73,6 @@ DEFAULT_EDITOR="nano"
 DEFAULT_BROWSER="firefox"
 DEFAULT_TERMINAL="st"
 
-# Wallpaper configuration
-WALLPAPER_SIZE="1920x1080"
-
 # Enable auto-start X on tty1 (1 = enable, 0 = disable)
 AUTO_START_X=1
 
